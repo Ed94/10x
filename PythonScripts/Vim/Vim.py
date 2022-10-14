@@ -1,6 +1,7 @@
 #------------------------------------------------------------------------
 import os
 import N10X
+import re
 
 #------------------------------------------------------------------------
 # Vim style editing
@@ -70,7 +71,8 @@ def IsCommandPrefix(c):
 		c == "g" or \
 		c == ">" or \
 		c == "<" or \
-		c == "y"
+		c == "y" or \
+		re.search(r"y\d+$", c) != None
 
 #------------------------------------------------------------------------
 def SetPrevCommand(c):
@@ -383,6 +385,13 @@ def HandleCommandModeChar(c):
 	global g_VisualMode
 	global g_YankMode
 
+	if c >= '1' and c <= '9' or (c == '0' and g_RepeatCount != None):
+		if g_RepeatCount == None:
+			g_RepeatCount = int(c)
+		else:
+			g_RepeatCount = 10 * g_RepeatCount + int(c)
+		is_repeat_key = True
+
 	if command == "i":
 		EnterInsertMode()
 
@@ -397,13 +406,6 @@ def HandleCommandModeChar(c):
 
 	elif IsCommandPrefix(command):
 		SetPrevCommand(command)
-
-	elif c >= '1' and c <= '9' or (c == '0' and g_RepeatCount != None):
-		if g_RepeatCount == None:
-			g_RepeatCount = int(c)
-		else:
-			g_RepeatCount = 10 * g_RepeatCount + int(c)
-		is_repeat_key = True
 
 	elif command == ":":
 		N10X.Editor.ExecuteCommand("ShowCommandPanel")
@@ -427,6 +429,12 @@ def HandleCommandModeChar(c):
 	elif command == "yy":
 		Yank()
 		
+	elif re.search(r"y\d+j", command) != None:
+		Yank(g_RepeatCount, 1)
+
+	elif re.search(r"y\d+k", command) != None:
+		Yank(g_RepeatCount, -1)
+
 	elif command == "yj":
 		Yank(1, 1)
 
