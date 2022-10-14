@@ -256,14 +256,19 @@ def JoinLine():
 	N10X.Editor.SetCursorPos(cursor_pos) # Need to set the cursor pos to right before join
 
 #------------------------------------------------------------------------
-def Yank():
+def Yank(lines = 0, direction = 0):
 	global g_VisualMode
 	global g_YankMode
 
 	repeat_count = GetAndClearRepeatCount()
 	cursor_pos = N10X.Editor.GetCursorPos()
-	line = N10X.Editor.GetLine(cursor_pos[1])
-	N10X.Editor.SetSelection((0, cursor_pos[1]), (len(line), cursor_pos[1]))
+	if direction == -1 and cursor_pos[1] - lines < 0:
+		lines = cursor_pos[1]
+	line = N10X.Editor.GetLine(cursor_pos[1] + lines * direction)
+	if direction == -1:
+		N10X.Editor.SetSelection((0, cursor_pos[1] + lines * direction), (len(line), cursor_pos[1]))
+	else:
+		N10X.Editor.SetSelection((0, cursor_pos[1]), (len(line), cursor_pos[1] + lines * direction))
 	g_YankMode = "line"
 		
 	N10X.Editor.ExecuteCommand("Copy")
@@ -421,6 +426,12 @@ def HandleCommandModeChar(c):
 
 	elif command == "yy":
 		Yank()
+		
+	elif command == "yj":
+		Yank(1, 1)
+
+	elif command == "yk":
+		Yank(1, -1)
 
 	elif command == "cc":
 		ReplaceLine()
@@ -727,5 +738,3 @@ N10X.Editor.AddOnSettingsChangedFunction(OnSettingsChanged)
 N10X.Editor.AddCommandPanelHandlerFunction(HandleCommandPanelCommand)
 
 N10X.Editor.CallOnMainThread(InitialiseVim)
-
-
