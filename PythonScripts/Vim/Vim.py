@@ -20,6 +20,7 @@ g_VisualMode = "none"				# "none", "standard", "line"
 g_VisualModeStartPos = None
 
 g_HandingKey = False
+g_AwaitingNextCharacter = False
 
 g_YankMode = "selection"			# "selection", "line"
 
@@ -72,6 +73,7 @@ def IsCommandPrefix(c):
 		c == ">" or \
 		c == "<" or \
 		c == "y" or \
+		c == "r" or \
 		re.search(r"y\d+$", c) != None
 
 #------------------------------------------------------------------------
@@ -368,6 +370,23 @@ def PasteBefore():
 		N10X.Editor.ExecuteCommand("Paste")
 
 #------------------------------------------------------------------------
+def ReplaceCursor(c):
+	cursor_pos = N10X.Editor.GetCursorPos()
+	N10X.Editor.PushUndoGroup()
+	N10X.Editor.SetSelection(cursor_pos, (cursor_pos[0] + 1, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("Cut")
+	N10X.Editor.InsertText(c)
+	N10X.Editor.SetCursorPos(cursor_pos)
+	N10X.Editor.PopUndoGroup()
+
+#------------------------------------------------------------------------
+def SubstituteCursor():
+	cursor_pos = N10X.Editor.GetCursorPos()
+	N10X.Editor.SetSelection(cursor_pos, (cursor_pos[0] + 1, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("Cut")
+	EnterInsertMode()
+
+#------------------------------------------------------------------------
 
 # Key Intercepting
 
@@ -375,6 +394,15 @@ def PasteBefore():
 def HandleCommandModeChar(c):
 
 	global g_PrevCommand
+	global g_AwaitingNextCharacter
+
+	if g_AwaitingNextCharacter:
+		if g_PrevCommand == "r":
+			ReplaceCursor(c)
+		g_AwaitingNextCharacter = False
+		SetPrevCommand(None)
+		return
+
 	command = c
 	if g_PrevCommand:
 		command = g_PrevCommand + c
@@ -475,6 +503,12 @@ def HandleCommandModeChar(c):
 
 	elif command == "w":
 		RepeatedCommand("MoveCursorNextWord")
+		
+	elif command == "r":
+		g_AwaitingNextCharacter = True
+
+	elif command == "s":
+		SubstituteCursor()
 
 	elif command == "dw":
 		CutToEndOfWord()
