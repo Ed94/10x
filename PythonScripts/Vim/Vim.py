@@ -74,7 +74,8 @@ def IsCommandPrefix(c):
 		c == "<" or \
 		c == "y" or \
 		c == "r" or \
-		re.search(r"y\d+$", c) != None
+		re.search(r"y\d+$", c) != None or \
+		re.search(r"d\d+$", c) != None
 
 #------------------------------------------------------------------------
 def SetPrevCommand(c):
@@ -279,6 +280,33 @@ def Yank(lines = 0, direction = 0):
 	N10X.Editor.SetCursorPos(cursor_pos)
 
 #------------------------------------------------------------------------
+def CutLines(lines = 0, direction = 0):
+	global g_VisualMode
+	global g_YankMode
+
+	repeat_count = GetAndClearRepeatCount()
+	cursor_pos = N10X.Editor.GetCursorPos()
+	if direction == -1 and cursor_pos[1] - lines < 0:
+		lines = cursor_pos[1]
+
+	if direction == -1:
+		line = N10X.Editor.GetLine(cursor_pos[1])
+		N10X.Editor.SetSelection((0, cursor_pos[1] + lines * direction), (len(line), cursor_pos[1]))
+	else:
+		line = N10X.Editor.GetLine(cursor_pos[1] + lines * direction)
+		N10X.Editor.SetSelection((0, cursor_pos[1]), (len(line), cursor_pos[1] + lines * direction))
+	g_YankMode = "line"
+		
+	N10X.Editor.PushUndoGroup()
+	N10X.Editor.ExecuteCommand("Cut")
+	N10X.Editor.ExecuteCommand("DeleteLine")
+	MoveToStartOfLine();
+	line = N10X.Editor.GetLine(N10X.Editor.GetCursorPos()[1])
+	if line.isspace() == False and line[0].isspace():
+		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
+	N10X.Editor.PopUndoGroup()
+
+#------------------------------------------------------------------------
 def YankSelection():
 	global g_VisualMode
 	global g_YankMode
@@ -452,7 +480,19 @@ def HandleCommandModeChar(c):
 			EnterVisualMode("line")
 
 	elif command == "dd":
-		DeleteLine()
+		CutLines()
+
+	elif command == "dj":
+		CutLines(1, 1)
+		
+	elif command == "dk":
+		CutLines(1, -1)
+
+	elif re.search(r"d\d+j", command) != None:
+		CutLines(g_RepeatCount, 1)
+
+	elif re.search(r"d\d+k", command) != None:
+		CutLines(g_RepeatCount, -1)
 
 	elif command == "yy":
 		Yank()
