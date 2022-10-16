@@ -74,6 +74,7 @@ def IsCommandPrefix(c):
 		c == "<" or \
 		c == "y" or \
 		c == "r" or \
+		c == "ci" or \
 		re.search(r"y\d+$", c) != None or \
 		re.search(r"d\d+$", c) != None
 
@@ -181,6 +182,21 @@ def IsWordChar(c):
 		(c >= '0' and c <= '9') or \
 		c == '_'
 
+
+#------------------------------------------------------------------------
+def IsInsideWord(cursor_pos):
+	line = N10X.Editor.GetLine(cursor_pos[1])
+	if cursor_pos[0] > 0 and cursor_pos[0] < len(line):
+		if IsWordChar(line[cursor_pos[0] - 1]) and IsWordChar(line[cursor_pos[0] + 1]):
+			return True
+
+#------------------------------------------------------------------------
+def IsEndOfWord(cursor_pos):
+	line = N10X.Editor.GetLine(cursor_pos[1])
+	if cursor_pos[0] < len(line):
+		if IsWordChar(line[cursor_pos[0] + 1]) == False:
+			return True
+
 #------------------------------------------------------------------------
 def GetWordEnd():
 	cursor_pos = N10X.Editor.GetCursorPos()
@@ -207,6 +223,27 @@ def CutToEndOfWordAndInsert():
 
 	EnterInsertMode()
 
+#------------------------------------------------------------------------
+def CutWordAndInsert():
+	repeat_count = GetAndClearRepeatCount()
+	cursor_pos = N10X.Editor.GetCursorPos()
+	line = N10X.Editor.GetLine(cursor_pos[1])
+
+	if line.isspace():
+		EnterInsertMode()
+		return
+
+	N10X.Editor.PushUndoGroup()
+	if IsInsideWord(cursor_pos) or IsEndOfWord(cursor_pos):
+		N10X.Editor.ExecuteCommand("MoveCursorPrevWord")
+		
+	cursor_pos = N10X.Editor.GetCursorPos()
+	word_end_pos = GetWordEnd()
+	N10X.Editor.SetSelection(cursor_pos, (word_end_pos, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("Cut")
+	N10X.Editor.PopUndoGroup()
+
+	EnterInsertMode()
 
 #------------------------------------------------------------------------
 def CutToEndOfLine():
@@ -218,7 +255,6 @@ def CutToEndOfLine():
 	N10X.Editor.ExecuteCommand("Cut")
 
 #------------------------------------------------------------------------
-
 def CutToEndOfLineAndInsert():
 	CutToEndOfLine()
 	EnterInsertMode()
@@ -555,6 +591,9 @@ def HandleCommandModeChar(c):
 
 	elif command == "cw":
 		CutToEndOfWordAndInsert()
+		
+	elif command == "ciw":
+		CutWordAndInsert()
 
 	elif command == "dW" or command == "D":
 		CutToEndOfLine()
