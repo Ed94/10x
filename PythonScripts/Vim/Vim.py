@@ -14,6 +14,7 @@ g_VimEnabled = False
 g_CommandMode = "insert"
 
 g_PrevCommand = None
+g_PrevInsert = None
 g_RepeatCount = None
 
 g_VisualMode = "none"				# "none", "standard", "line"
@@ -21,6 +22,8 @@ g_VisualModeStartPos = None
 
 g_HandingKey = False
 g_AwaitingNextCharacter = False
+g_Timer = 0
+g_ExitInsertMode = None
 
 g_YankMode = "selection"			# "selection", "line"
 
@@ -182,6 +185,10 @@ def IsWordChar(c):
 		(c >= '0' and c <= '9') or \
 		c == '_'
 
+#------------------------------------------------------------------------
+def IsNotWordChar(c):
+	return \
+		re.search(r"[-!$%^&*()_+|~=`{}\[\]:\";'<>?,.\/]", c) != None
 
 #------------------------------------------------------------------------
 def IsInsideWord(cursor_pos):
@@ -228,6 +235,10 @@ def CutWordAndInsert():
 	repeat_count = GetAndClearRepeatCount()
 	cursor_pos = N10X.Editor.GetCursorPos()
 	line = N10X.Editor.GetLine(cursor_pos[1])
+
+	if IsNotWordChar(line[cursor_pos[0]]):
+		EnterInsertMode()
+		return
 
 	if line.isspace():
 		EnterInsertMode()
@@ -799,10 +810,31 @@ def OnInterceptKey(key, shift, control, alt):
 def OnInterceptCharKey(c):
 	if N10X.Editor.TextEditorHasFocus():
 		global g_CommandMode
+		global g_PrevInsert
+		global g_Timer
+		global g_ExitInsertMode
 		if g_CommandMode == "normal":
 			HandleCommandModeChar(c)
 			return True
-
+		elif g_ExitInsertMode != None and g_CommandMode == "insert":
+			if c == g_ExitInsertMode and g_PrevInsert == None and g_Timer == 0:
+				g_Timer = time.time()
+				g_PrevInsert = g_ExitInsertMode
+				return True
+			elif c == g_ExitInsertMode and g_PrevInsert == g_ExitInsertMode and time.time() - g_Timer <= 1:
+				g_Timer = 0
+				g_PrevInsert = None
+				EnterCommandMode()
+				return True
+			elif c == g_ExitInsertMode and g_PrevInsert == g_ExitInsertMode:
+				g_Timer = 0
+				g_PrevInsert = None
+				N10X.Editor.InsertText(g_ExitInsertMode)
+			elif c != g_ExitInsertMode and g_PrevInsert == g_ExitInsertMode:
+				g_Timer = 0
+				g_PrevInsert = None
+				N10X.Editor.InsertText(g_ExitInsertMode)
+			
 #------------------------------------------------------------------------
 def HandleCommandPanelCommand(command):
 
@@ -827,7 +859,13 @@ def HandleCommandPanelCommand(command):
 #------------------------------------------------------------------------
 def EnableVim():
 	global g_VimEnabled
+	global g_ExitInsertMode
 	enable_vim = N10X.Editor.GetSetting("Vim") == "true"
+	g_ExitInsertMode = None
+	if N10X.Editor.GetSetting("ExitInsertMode"):
+		g_ExitInsertMode = N10X.Editor.GetSetting("ExitInsertMode")
+		if len(g_ExitInsertMode) > 1:
+			g_ExitInsertMode = g_ExitInsertMode[0]
 
 	if g_VimEnabled != enable_vim:
 		g_VimEnabled = enable_vim
