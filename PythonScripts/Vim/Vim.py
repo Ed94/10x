@@ -252,9 +252,7 @@ def CutWordAndInsert():
 	if IsInsideWord(cursor_pos) or IsEndOfWord(cursor_pos):
 		N10X.Editor.ExecuteCommand("MoveCursorPrevWord")
 		
-	cursor_pos = N10X.Editor.GetCursorPos()
-	word_end_pos = GetWordEnd()
-	N10X.Editor.SetSelection(cursor_pos, (word_end_pos, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("SelectCurrentWord")
 	N10X.Editor.ExecuteCommand("Cut")
 	N10X.Editor.PopUndoGroup()
 
