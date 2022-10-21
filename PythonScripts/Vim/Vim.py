@@ -78,6 +78,7 @@ def IsCommandPrefix(c):
 		c == "y" or \
 		c == "r" or \
 		c == "ci" or \
+		c == "di" or \
 		c == "ya" or \
 		c == "yi" or \
 		c == "va" or \
@@ -233,6 +234,24 @@ def CutToEndOfWordAndInsert():
 	N10X.Editor.ExecuteCommand("Cut")
 
 	EnterInsertMode()
+
+#------------------------------------------------------------------------
+def CutWord():
+	N10X.Editor.ExecuteCommand("SelectCurrentWord")
+	N10X.Editor.ExecuteCommand("Cut")
+
+#------------------------------------------------------------------------
+def SelectWord():
+	#This currently has issues. It selects a word ok, but the visual mode start position
+	#is not set to the start of the word so when you navigate away it messes up the selection
+	global g_VisualModeStartPos
+	global g_VisualMode
+	N10X.Editor.ExecuteCommand("SelectCurrentWord")
+	start = N10X.Editor.GetSelectionStart()
+	end = N10X.Editor.GetSelectionEnd()
+	N10X.Editor.SetSelection(start, end, cursor=1)
+	g_VisualMode = "standard"
+	g_VisualModeStartPos = start
 
 #------------------------------------------------------------------------
 def CutWordAndInsert():
@@ -705,6 +724,12 @@ def HandleCommandModeChar(c):
 		
 	elif command == "ciw":
 		CutWordAndInsert()
+
+	elif command == "diw":
+		CutWord()
+
+	elif command == "viw":
+		N10X.Editor.ExecuteCommand("SelectCurrentWord")
 
 	elif command == "dW" or command == "D":
 		CutToEndOfLine()
