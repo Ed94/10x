@@ -760,7 +760,19 @@ def HandleCommandModeChar(c):
 		# It shouldn't go to the next line, it should just go to the last possible position.
 		# This might be a byproduct of not using a block cursor in insertmode, where you
 		# actually can't go to the position after the last char.
-		N10X.Editor.ExecuteCommand("MoveCursorRight");
+		#N10X.Editor.ExecuteCommand("MoveCursorRight")
+		
+		# Alternative:
+		cursor_pos = N10X.Editor.GetCursorPos()
+		line       = N10X.Editor.GetLine(cursor_pos[1])
+		
+		if ( cursor_pos[0] < ( len(line) - 2 ) ):
+			N10X.Editor.ExecuteCommand("MoveCursorRight")
+			
+		else:
+			print("HERE")
+			N10X.Editor.SetCursorPos((len(line) - 1, cursor_pos[1]))
+	
 		EnterInsertMode();
 
 	elif command == "A":
