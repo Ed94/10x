@@ -1,6 +1,7 @@
 #------------------------------------------------------------------------
 import os
 import N10X
+import re
 
 #------------------------------------------------------------------------
 # Vim style editing
@@ -13,12 +14,18 @@ g_VimEnabled = False
 g_CommandMode = "insert"
 
 g_PrevCommand = None
+g_PrevInsert = None
 g_RepeatCount = None
 
 g_VisualMode = "none"                # "none", "standard", "line"
 g_VisualModeStartPos = None
 
 g_HandingKey = False
+g_AwaitingNextCharacter = False
+g_Timer = 0
+g_ExitInsertMode = None
+
+g_YankMode = "selection"			# "selection", "line", "paragraph"
 
 #------------------------------------------------------------------------
 # Modes
@@ -62,13 +69,22 @@ def ExitVisualMode():
 
 #------------------------------------------------------------------------
 def IsCommandPrefix(c):
-    return \
-        c == "c" or \
-        c == "d" or \
-        c == "g" or \
-        c == ">" or \
-        c == "<" or \
-        c == "y"
+	return \
+		c == "c" or \
+		c == "d" or \
+		c == "g" or \
+		c == ">" or \
+		c == "<" or \
+		c == "y" or \
+		c == "r" or \
+		c == "ci" or \
+		c == "di" or \
+		c == "ya" or \
+		c == "yi" or \
+		c == "va" or \
+		c == "vi" or \
+		re.search(r"y\d+$", c) != None or \
+		re.search(r"d\d+$", c) != None
 
 #------------------------------------------------------------------------
 def SetPrevCommand(c):
@@ -103,6 +119,15 @@ def RepeatedEditCommand(command):
     N10X.Editor.PushUndoGroup()
     RepeatedCommand(command)
     N10X.Editor.PopUndoGroup()
+
+#------------------------------------------------------------------------
+def GetLengthWithoutNewline(text):
+	length = len(text)
+	if text.endswith("\r\n"):
+		length -= 2
+	elif text.endswith("\n"):
+		length -= 1
+	return length
 
 #------------------------------------------------------------------------
 def UpdateVisualModeSelection():
@@ -150,14 +175,14 @@ def MoveToEndOfFile():
 
 #------------------------------------------------------------------------
 def MoveToStartOfLine():
-    cursor_pos = N10X.Editor.GetCursorPos()
-    N10X.Editor.SetCursorPos((0, cursor_pos[1]))
-
+	cursor_pos = N10X.Editor.GetCursorPos()
+	N10X.Editor.SetCursorPos((0, cursor_pos[1]))
+	line = N10X.Editor.GetLine(cursor_pos[1])
 #------------------------------------------------------------------------
 def MoveToEndOfLine():
-    cursor_pos = N10X.Editor.GetCursorPos()
-    line = N10X.Editor.GetLine(cursor_pos[1])
-    N10X.Editor.SetCursorPos((len(line), cursor_pos[1]))
+	cursor_pos = N10X.Editor.GetCursorPos()
+	line = N10X.Editor.GetLine(cursor_pos[1])
+	N10X.Editor.SetCursorPos((GetLengthWithoutNewline(line), cursor_pos[1]))
 
 #------------------------------------------------------------------------
 def IsWordChar(c):
@@ -166,6 +191,25 @@ def IsWordChar(c):
         (c >= 'A' and c <= 'Z') or \
         (c >= '0' and c <= '9') or \
         c == '_'
+
+#------------------------------------------------------------------------
+def IsNotWordChar(c):
+	return \
+		re.search(r"[-!$%^&*()_+|~=`{}\[\]:\";'<>?,.\/]", c) != None
+
+#------------------------------------------------------------------------
+def IsInsideWord(cursor_pos):
+	line = N10X.Editor.GetLine(cursor_pos[1])
+	if cursor_pos[0] > 0 and cursor_pos[0] < len(line):
+		if IsWordChar(line[cursor_pos[0] - 1]) and IsWordChar(line[cursor_pos[0] + 1]):
+			return True
+
+#------------------------------------------------------------------------
+def IsEndOfWord(cursor_pos):
+	line = N10X.Editor.GetLine(cursor_pos[1])
+	if cursor_pos[0] < len(line):
+		if IsWordChar(line[cursor_pos[0] + 1]) == False:
+			return True
 
 #------------------------------------------------------------------------
 def GetWordEnd():
@@ -193,6 +237,47 @@ def CutToEndOfWordAndInsert():
 
     EnterInsertMode()
 
+#------------------------------------------------------------------------
+def CutWord():
+	N10X.Editor.ExecuteCommand("SelectCurrentWord")
+	N10X.Editor.ExecuteCommand("Cut")
+
+#------------------------------------------------------------------------
+def SelectWord():
+	#This currently has issues. It selects a word ok, but the visual mode start position
+	#is not set to the start of the word so when you navigate away it messes up the selection
+	global g_VisualModeStartPos
+	global g_VisualMode
+	N10X.Editor.ExecuteCommand("SelectCurrentWord")
+	start = N10X.Editor.GetSelectionStart()
+	end = N10X.Editor.GetSelectionEnd()
+	N10X.Editor.SetSelection(start, end, cursor=1)
+	g_VisualMode = "standard"
+	g_VisualModeStartPos = start
+
+#------------------------------------------------------------------------
+def CutWordAndInsert():
+	repeat_count = GetAndClearRepeatCount()
+	cursor_pos = N10X.Editor.GetCursorPos()
+	line = N10X.Editor.GetLine(cursor_pos[1])
+
+	if IsNotWordChar(line[cursor_pos[0]]):
+		EnterInsertMode()
+		return
+
+	if line.isspace():
+		EnterInsertMode()
+		return
+
+	N10X.Editor.PushUndoGroup()
+	if IsInsideWord(cursor_pos) or IsEndOfWord(cursor_pos):
+		N10X.Editor.ExecuteCommand("MoveCursorPrevWord")
+		
+	N10X.Editor.ExecuteCommand("SelectCurrentWord")
+	N10X.Editor.ExecuteCommand("Cut")
+	N10X.Editor.PopUndoGroup()
+
+	EnterInsertMode()
 
 #------------------------------------------------------------------------
 def CutToEndOfLine():
@@ -204,7 +289,6 @@ def CutToEndOfLine():
     N10X.Editor.ExecuteCommand("Cut")
 
 #------------------------------------------------------------------------
-
 def CutToEndOfLineAndInsert():
     CutToEndOfLine()
     EnterInsertMode()
@@ -246,19 +330,112 @@ def JoinLine():
     N10X.Editor.SetCursorPos(cursor_pos) # Need to set the cursor pos to right before join
 
 #------------------------------------------------------------------------
-def Yank():
-    global g_VisualMode
-    cursor_pos = N10X.Editor.GetCursorPos()
-    repeat_count = GetAndClearRepeatCount()
+def SelectParagraph(cursor_pos, all):
+	cursor_rev_pos = cursor_pos[1]
+	cursor_fwd_pos = cursor_pos[1]
+	while cursor_rev_pos > 0 and N10X.Editor.GetLine(cursor_rev_pos).isspace() != True:
+		cursor_rev_pos -= 1
+	while cursor_fwd_pos <= N10X.Editor.GetLineCount() and N10X.Editor.GetLine(cursor_fwd_pos).isspace() != True:
+		cursor_fwd_pos += 1
+	if N10X.Editor.GetLine(cursor_rev_pos).isspace() == True:
+		cursor_rev_pos += 1;
+	if all == False and N10X.Editor.GetLine(cursor_fwd_pos).isspace() == True:
+		cursor_fwd_pos -= 1;
+	last_line = N10X.Editor.GetLine(cursor_fwd_pos)
+	N10X.Editor.SetSelection((0, cursor_rev_pos), (len(last_line), cursor_fwd_pos))
 
-    if g_VisualMode != "none":
-        SubmitVisualModeSelection()
-    else:
-        cursor_pos = N10X.Editor.GetCursorPos()
-        N10X.Editor.SetSelection((0, cursor_pos[1]), (0, cursor_pos[1] + repeat_count))
-        
-    N10X.Editor.ExecuteCommand("Copy")
-    N10X.Editor.SetCursorPos(cursor_pos)
+#------------------------------------------------------------------------
+def SelectParagraphVisual(cursor_pos, all):
+	global g_VisualMode
+	global g_VisualModeStartPos
+
+	cursor_rev_pos = cursor_pos[1]
+	cursor_fwd_pos = cursor_pos[1]
+	while cursor_rev_pos > 0 and N10X.Editor.GetLine(cursor_rev_pos).isspace() != True:
+		cursor_rev_pos -= 1
+	while cursor_fwd_pos <= N10X.Editor.GetLineCount() and N10X.Editor.GetLine(cursor_fwd_pos).isspace() != True:
+		cursor_fwd_pos += 1
+	if N10X.Editor.GetLine(cursor_rev_pos).isspace() == True:
+		cursor_rev_pos += 1;
+	if all == False and N10X.Editor.GetLine(cursor_fwd_pos).isspace() == True:
+		cursor_fwd_pos -= 1;
+	last_line = N10X.Editor.GetLine(cursor_fwd_pos)
+	g_VisualModeStartPos = (0, cursor_rev_pos)
+	N10X.Editor.SetSelection((0, cursor_rev_pos), (len(last_line), cursor_fwd_pos), cursor_index=1)
+	g_VisualMode = "line"
+		
+#------------------------------------------------------------------------
+def Yank(lines = 0, direction = 0):
+	global g_VisualMode
+	global g_YankMode
+
+	repeat_count = GetAndClearRepeatCount()
+	cursor_pos = N10X.Editor.GetCursorPos()
+	if direction == -1 and cursor_pos[1] - lines < 0:
+		lines = cursor_pos[1]
+	line = N10X.Editor.GetLine(cursor_pos[1] + lines * direction)
+	if direction == -1:
+		N10X.Editor.SetSelection((0, cursor_pos[1] + lines * direction), (len(line), cursor_pos[1]))
+	else:
+		N10X.Editor.SetSelection((0, cursor_pos[1]), (len(line), cursor_pos[1] + lines * direction))
+	g_YankMode = "line"
+		
+	N10X.Editor.ExecuteCommand("Copy")
+	N10X.Editor.SetCursorPos(cursor_pos)
+
+#------------------------------------------------------------------------
+def YankParagraph(all):
+	global g_YankMode
+	cursor_pos = N10X.Editor.GetCursorPos()
+	SelectParagraph(cursor_pos, all)
+	N10X.Editor.ExecuteCommand("Copy")
+	N10X.Editor.SetCursorPos(cursor_pos)
+	if all == True:
+		g_YankMode = "paragraph"
+	else:
+		g_YankMode = "line"
+
+#------------------------------------------------------------------------
+def CutLines(lines = 0, direction = 0):
+	global g_VisualMode
+	global g_YankMode
+
+	repeat_count = GetAndClearRepeatCount()
+	cursor_pos = N10X.Editor.GetCursorPos()
+	if direction == -1 and cursor_pos[1] - lines < 0:
+		lines = cursor_pos[1]
+
+	if direction == -1:
+		line = N10X.Editor.GetLine(cursor_pos[1])
+		N10X.Editor.SetSelection((0, cursor_pos[1] + lines * direction), (len(line), cursor_pos[1]))
+	else:
+		line = N10X.Editor.GetLine(cursor_pos[1] + lines * direction)
+		N10X.Editor.SetSelection((0, cursor_pos[1]), (len(line), cursor_pos[1] + lines * direction))
+	g_YankMode = "line"
+		
+	N10X.Editor.PushUndoGroup()
+	N10X.Editor.ExecuteCommand("Cut")
+	N10X.Editor.ExecuteCommand("DeleteLine")
+	MoveToStartOfLine();
+	line = N10X.Editor.GetLine(N10X.Editor.GetCursorPos()[1])
+	if line.isspace() == False and line[0].isspace():
+		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
+	N10X.Editor.PopUndoGroup()
+
+#------------------------------------------------------------------------
+def YankSelection():
+	global g_VisualMode
+	global g_YankMode
+
+	SubmitVisualModeSelection()
+	cursor_pos = N10X.Editor.GetCursorPos()
+	if g_VisualMode == "standard":
+		g_YankMode = "selection"
+	else:
+		g_YankMode = "line"
+		
+	N10X.Editor.ExecuteCommand("Copy")
+	N10X.Editor.SetCursorPos(cursor_pos)
 
 #------------------------------------------------------------------------
 def ReplaceLine():
@@ -277,16 +454,14 @@ def ReplaceCharacters():
     
 #------------------------------------------------------------------------
 def DeleteCharacters():
-    global g_VisualMode
-    repeat_count = GetAndClearRepeatCount()
-    
-    if g_VisualMode != "none":
-        SubmitVisualModeSelection()
-    else:
-        cursor_pos = N10X.Editor.GetCursorPos()
-        N10X.Editor.SetSelection(cursor_pos, (cursor_pos[0] + repeat_count, cursor_pos[1]))
-        
-    N10X.Editor.ExecuteCommand("Cut")
+	global g_VisualMode
+	if g_VisualMode != "none":
+		SubmitVisualModeSelection()
+	else:
+		repeat_count = GetAndClearRepeatCount()
+		cursor_pos = N10X.Editor.GetCursorPos()
+		N10X.Editor.SetSelection(cursor_pos, (cursor_pos[0] + repeat_count, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("Cut")
 
 #------------------------------------------------------------------------
 def AppendNewLineBelow():
@@ -298,29 +473,140 @@ def AppendNewLineBelow():
     N10X.Editor.PopUndoGroup()
 
 #------------------------------------------------------------------------
+def CapitaliseSelection():
+	global g_VisualMode
+	if g_VisualMode != "none":
+		SubmitVisualModeSelection()
+	else:
+		repeat_count = GetAndClearRepeatCount()
+		cursor_pos = N10X.Editor.GetCursorPos()
+		N10X.Editor.SetSelection(cursor_pos, (cursor_pos[0] + repeat_count, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("MakeSelectionUppercase")
+
+#------------------------------------------------------------------------
+def PasteAfter():
+	global g_VisualMode
+	global g_YankMode
+	if g_VisualMode != "none":
+		SubmitVisualModeSelection()
+
+	if g_YankMode == "line":
+		N10X.Editor.PushUndoGroup()
+		MoveToEndOfLine()
+		EnterInsertMode()
+		N10X.Editor.SendKey("Enter")
+		EnterCommandMode()
+		MoveToStartOfLine()
+		N10X.Editor.ExecuteCommand("Paste")
+		MoveToStartOfLine()
+		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
+		N10X.Editor.PopUndoGroup()
+
+	elif g_YankMode == "selection":
+		N10X.Editor.PushUndoGroup()
+		N10X.Editor.SendKey("Right")
+		N10X.Editor.ExecuteCommand("Paste")
+		N10X.Editor.PopUndoGroup()
+
+	elif g_YankMode == "paragraph":
+		N10X.Editor.PushUndoGroup()
+		MoveToEndOfLine()
+		EnterInsertMode()
+		N10X.Editor.SendKey("Enter")
+		cursor_pos = N10X.Editor.GetCursorPos()
+		MoveToStartOfLine()
+		N10X.Editor.ExecuteCommand("Paste")
+		EnterCommandMode()
+		N10X.Editor.SetCursorPos(cursor_pos)
+		N10X.Editor.PopUndoGroup()
+
+#------------------------------------------------------------------------
+def PasteBefore():
+	global g_VisualMode
+	global g_YankMode
+
+	if g_VisualMode != "none":
+		SubmitVisualModeSelection()
+
+	if g_YankMode == "line":
+		N10X.Editor.PushUndoGroup()
+		N10X.Editor.ExecuteCommand("InsertLine");
+		MoveToStartOfLine()
+		N10X.Editor.ExecuteCommand("Paste")
+		MoveToStartOfLine()
+		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
+		N10X.Editor.PopUndoGroup()
+
+	elif g_YankMode == "selection":
+		N10X.Editor.ExecuteCommand("Paste")
+
+	elif g_YankMode == "paragraph":
+		N10X.Editor.PushUndoGroup()
+		N10X.Editor.ExecuteCommand("InsertLine");
+		cursor_pos = N10X.Editor.GetCursorPos()
+		MoveToStartOfLine()
+		N10X.Editor.ExecuteCommand("Paste")
+		N10X.Editor.SetCursorPos(cursor_pos)
+		N10X.Editor.PopUndoGroup()
+
+#------------------------------------------------------------------------
+def ReplaceCursor(c):
+	cursor_pos = N10X.Editor.GetCursorPos()
+	N10X.Editor.PushUndoGroup()
+	N10X.Editor.SetSelection(cursor_pos, (cursor_pos[0] + 1, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("Cut")
+	N10X.Editor.InsertText(c)
+	N10X.Editor.SetCursorPos(cursor_pos)
+	N10X.Editor.PopUndoGroup()
+
+#------------------------------------------------------------------------
+def SubstituteCursor():
+	cursor_pos = N10X.Editor.GetCursorPos()
+	N10X.Editor.SetSelection(cursor_pos, (cursor_pos[0] + 1, cursor_pos[1]))
+	N10X.Editor.ExecuteCommand("Cut")
+	EnterInsertMode()
+
+#------------------------------------------------------------------------
+
 # Key Intercepting
 
 #------------------------------------------------------------------------
 def HandleCommandModeChar(c):
 
-    global g_PrevCommand
-    command = c
-    if g_PrevCommand:
-        command = g_PrevCommand + c
+	global g_PrevCommand
+	global g_AwaitingNextCharacter
 
-    global g_RepeatCount
-    is_repeat_key = False
+	if g_AwaitingNextCharacter:
+		if g_PrevCommand == "r":
+			ReplaceCursor(c)
+		g_AwaitingNextCharacter = False
+		SetPrevCommand(None)
+		return
 
-    global g_VisualMode
+	command = c
+	if g_PrevCommand:
+		command = g_PrevCommand + c
+	global g_RepeatCount
+	is_repeat_key = False
 
-    if command == "i":
-        EnterInsertMode()
+	global g_VisualMode
+	global g_YankMode
+
+	if c >= '1' and c <= '9' or (c == '0' and g_RepeatCount != None):
+		if g_RepeatCount == None:
+			g_RepeatCount = int(c)
+		else:
+			g_RepeatCount = 10 * g_RepeatCount + int(c)
+		is_repeat_key = True
+
+	if g_VisualMode == "none" and command == "i":
+		EnterInsertMode()
 
     elif g_VisualMode != "none" and command == "d":
         DeleteLine()
 
-    elif g_VisualMode != "none" and command == "y":
-        Yank()
+	elif g_VisualMode != "none" and command == "y":
+		YankSelection()
 
     elif g_VisualMode != "none" and command == "c":
         if g_VisualMode == "line":
@@ -328,19 +614,20 @@ def HandleCommandModeChar(c):
         else:
             ReplaceCharacters()
 
-    elif IsCommandPrefix(command):
-        SetPrevCommand(command)
+	elif g_VisualMode != "none" and command == "i":
+		g_PrevCommand = "vi"
+		command = "vi"
 
-    elif c >= '1' and c <= '9' or (c == '0' and g_RepeatCount != None):
-        if g_RepeatCount == None:
-            g_RepeatCount = int(c)
-        else:
-            g_RepeatCount = 10 * g_RepeatCount + int(c)
-        is_repeat_key = True
+	elif g_VisualMode != "none" and command == "a":
+		g_PrevCommand = "va"
+		command = "va"
 
-    elif command == ":":
-        N10X.Editor.ExecuteCommand("ShowCommandPanel")
-        N10X.Editor.SetCommandPanelText(":")
+	elif IsCommandPrefix(command):
+		SetPrevCommand(command)
+
+	elif command == ":":
+		N10X.Editor.ExecuteCommand("ShowCommandPanel")
+		N10X.Editor.SetCommandPanelText(":")
 
     elif command == "v":
         if g_VisualMode == "standard":
@@ -354,18 +641,56 @@ def HandleCommandModeChar(c):
         else:
             EnterVisualMode("line")
 
-    elif command == "dd":
-        DeleteLine()
+	elif command == "dd":
+		CutLines()
 
-    elif command == "yy":
-        Yank()
+	elif command == "dj":
+		CutLines(1, 1)
+		
+	elif command == "dk":
+		CutLines(1, -1)
+
+	elif re.search(r"d\d+j", command) != None:
+		CutLines(g_RepeatCount, 1)
+
+	elif re.search(r"d\d+k", command) != None:
+		CutLines(g_RepeatCount, -1)
+
+	elif command == "yy":
+		Yank()
+		
+	elif re.search(r"y\d+j", command) != None:
+		Yank(g_RepeatCount, 1)
+
+	elif re.search(r"y\d+k", command) != None:
+		Yank(g_RepeatCount, -1)
+
+	elif command == "yj":
+		Yank(1, 1)
+
+	elif command == "yk":
+		Yank(1, -1)
+
+	elif command == "yap":
+		YankParagraph(True)
+
+	elif command == "yip":
+		YankParagraph(False)
+
+	elif command == "vap":
+		cursor_pos = N10X.Editor.GetCursorPos()
+		SelectParagraphVisual(cursor_pos, True)
+
+	elif command == "vip":
+		cursor_pos = N10X.Editor.GetCursorPos()
+		SelectParagraphVisual(cursor_pos, False)
 
     elif command == "cc":
         ReplaceLine()
 
-    elif command == "P":
-        SubmitVisualModeSelection()
-        RepeatedEditCommand("Paste")
+	elif command == "P":
+		SubmitVisualModeSelection()
+		PasteBefore()
 
     elif command == "h":
         RepeatedCommand(lambda:N10X.Editor.SendKey("Left"));
@@ -393,14 +718,29 @@ def HandleCommandModeChar(c):
         RepeatedCommand("MoveCursorPrevWord")
         UpdateVisualModeSelection()
 
-    elif command == "w":
-        RepeatedCommand("MoveCursorNextWord")
-        UpdateVisualModeSelection()
+	elif command == "w":
+		RepeatedCommand("MoveCursorNextWord")
+		
+	elif command == "r":
+		g_AwaitingNextCharacter = True
 
-    elif command == "dw":
-        CutToEndOfWord()
-    elif command == "cw":
-        CutToEndOfWordAndInsert()
+	elif command == "s":
+		SubstituteCursor()
+
+	elif command == "dw":
+		CutToEndOfWord()
+
+	elif command == "cw":
+		CutToEndOfWordAndInsert()
+		
+	elif command == "ciw":
+		CutWordAndInsert()
+
+	elif command == "diw":
+		CutWord()
+
+	elif command == "viw":
+		N10X.Editor.ExecuteCommand("SelectCurrentWord")
 
     elif command == "dW" or command == "D":
         CutToEndOfLine()
@@ -428,21 +768,27 @@ def HandleCommandModeChar(c):
         MoveToEndOfLine();
         EnterInsertMode();
 
-    elif command == "e":
-        cursor_pos = N10X.Editor.GetCursorPos()
-        N10X.Editor.SetCursorPos((GetWordEnd(), cursor_pos[1]))
-        UpdateVisualModeSelection()
+	elif command == "~":
+		CapitaliseSelection()
 
-    elif command == "p":
-        # In vim, the cursor should "stay with the line."
-        # Doing this for P seems to do some weird selection thing.
-        SubmitVisualModeSelection()
-        N10X.Editor.ExecuteCommand("MoveCursorDown");
-        N10X.Editor.ExecuteCommand("Paste")
-        N10X.Editor.ExecuteCommand("MoveCursorUp");
+	elif command == "e":
+		cursor_pos = N10X.Editor.GetCursorPos()
+		N10X.Editor.SetCursorPos((GetWordEnd(), cursor_pos[1]))
 
-    elif command == "*":
-        RepeatedCommand("FindInFileNextCurrentWord")
+	elif command == "p":
+		# In vim, the cursor should "stay with the line."
+		# Doing this for P seems to do some weird selection thing.
+		SubmitVisualModeSelection()
+		PasteAfter()
+
+	elif command == "*":
+		RepeatedCommand("FindInFileNextCurrentWord")
+		
+	elif command == "n":
+		RepeatedCommand("FindInFileNext")
+
+	elif command == "N":
+		RepeatedCommand("FindInFilePrev")
 
     elif command == "#":
         RepeatedCommand("FindInFilePrevCurrentWord")
@@ -611,12 +957,33 @@ def OnInterceptKey(key, shift, control, alt):
 # Return true to surpress the char key.
 # If we are in command mode surpress all char keys
 def OnInterceptCharKey(c):
-    if N10X.Editor.TextEditorHasFocus():
-        global g_CommandMode
-        if g_CommandMode == "normal":
-            HandleCommandModeChar(c)
-            return True
-
+	if N10X.Editor.TextEditorHasFocus():
+		global g_CommandMode
+		global g_PrevInsert
+		global g_Timer
+		global g_ExitInsertMode
+		if g_CommandMode == "normal":
+			HandleCommandModeChar(c)
+			return True
+		elif g_ExitInsertMode != None and g_CommandMode == "insert":
+			if c == g_ExitInsertMode and g_PrevInsert == None and g_Timer == 0:
+				g_Timer = time.time()
+				g_PrevInsert = g_ExitInsertMode
+				return True
+			elif c == g_ExitInsertMode and g_PrevInsert == g_ExitInsertMode and time.time() - g_Timer <= 1:
+				g_Timer = 0
+				g_PrevInsert = None
+				EnterCommandMode()
+				return True
+			elif c == g_ExitInsertMode and g_PrevInsert == g_ExitInsertMode:
+				g_Timer = 0
+				g_PrevInsert = None
+				N10X.Editor.InsertText(g_ExitInsertMode)
+			elif c != g_ExitInsertMode and g_PrevInsert == g_ExitInsertMode:
+				g_Timer = 0
+				g_PrevInsert = None
+				N10X.Editor.InsertText(g_ExitInsertMode)
+			
 #------------------------------------------------------------------------
 def HandleCommandPanelCommand(command):
 
@@ -640,8 +1007,14 @@ def HandleCommandPanelCommand(command):
 
 #------------------------------------------------------------------------
 def EnableVim():
-    global g_VimEnabled
-    enable_vim = N10X.Editor.GetSetting("Vim") == "true"
+	global g_VimEnabled
+	global g_ExitInsertMode
+	enable_vim = N10X.Editor.GetSetting("Vim") == "true"
+	g_ExitInsertMode = None
+	if N10X.Editor.GetSetting("ExitInsertMode"):
+		g_ExitInsertMode = N10X.Editor.GetSetting("ExitInsertMode")
+		if len(g_ExitInsertMode) > 1:
+			g_ExitInsertMode = g_ExitInsertMode[0]
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
@@ -673,4 +1046,3 @@ N10X.Editor.AddOnSettingsChangedFunction(OnSettingsChanged)
 N10X.Editor.AddCommandPanelHandlerFunction(HandleCommandPanelCommand)
 
 N10X.Editor.CallOnMainThread(InitialiseVim)
-
