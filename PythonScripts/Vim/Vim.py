@@ -496,8 +496,10 @@ def PasteAfter():
 		EnterInsertMode()
 		N10X.Editor.SendKey("Enter")
 		EnterCommandMode()
+		MoveToStartOfLine()
 		N10X.Editor.ExecuteCommand("Paste")
-		N10X.Editor.ExecuteCommand("MoveToLineEnd")
+		MoveToStartOfLine()
+		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
 		N10X.Editor.PopUndoGroup()
 
 	elif g_YankMode == "selection":
@@ -528,12 +530,10 @@ def PasteBefore():
 
 	if g_YankMode == "line":
 		N10X.Editor.PushUndoGroup()
-		N10X.Editor.ExecuteCommand("MoveCursorUp")
-		MoveToEndOfLine()
-		EnterInsertMode()
-		N10X.Editor.SendKey("Enter")
-		EnterCommandMode()
+		N10X.Editor.ExecuteCommand("InsertLine");
+		MoveToStartOfLine()
 		N10X.Editor.ExecuteCommand("Paste")
+		MoveToStartOfLine()
 		N10X.Editor.ExecuteCommand("MoveCursorNextWord")
 		N10X.Editor.PopUndoGroup()
 
