@@ -3703,7 +3703,8 @@ def InitialiseVim():
     EnableVim()
 
 #------------------------------------------------------------------------
-
+def DisableVim():
+    N10X.Editor.SetSetting("Vim", "false")
 
 # Prevent against being registered multiple times as VimUser.py imports Vim.py
 if __name__ == "__main__":
