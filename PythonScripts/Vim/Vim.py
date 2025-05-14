@@ -3648,7 +3648,7 @@ def OnFileLosingFocus():
         N10X.Editor.RemoveUpdateFunction(ExitInsertModeTimerCheck)
 
 #------------------------------------------------------------------------
-def EnableVim():
+def UpdateVim():
     global g_VimEnabled
     global g_Use10xCommandPanel
     global g_Use10xFindPanel
@@ -3696,15 +3696,18 @@ def EnableVim():
 #------------------------------------------------------------------------
 # enable/disable Vim when it's changed in the settings file
 def OnSettingsChanged():
-    EnableVim()
+    UpdateVim()
     
 #------------------------------------------------------------------------
 def InitialiseVim():
-    EnableVim()
+    UpdateVim()
 
 #------------------------------------------------------------------------
 def DisableVim():
     N10X.Editor.SetSetting("Vim", "false")
+
+def EnableVim():
+    N10X.Editor.SetSetting("Vim", "true")
 
 # Prevent against being registered multiple times as VimUser.py imports Vim.py
 if __name__ == "__main__":
