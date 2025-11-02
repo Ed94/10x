@@ -25,6 +25,9 @@ g_Use10xFindPanel = False
 # Whether the commandline history is filtered on what's currently typed - same behaviour as NeoVim.
 g_UseFilteredCommandlineHistory = True
 
+# Whether to show the current scope name in the status bar in normal/command mode
+g_DisplayCurrentScopeName = True
+
 #------------------------------------------------------------------------
 class Mode:
     INSERT       = 0
@@ -128,15 +131,21 @@ class Key:
     """
     def __init__(self, key, shift=False, control=False, alt=False):
         self.key = key
-        self.shift = shift
-        self.control = control
-        self.alt = alt
+        self.shift = bool(shift)
+        # In 10x AltGr will come through with the following set 
+        self.alt_gr = bool(key == "Alt" and control and alt)
+        # We need to make sure we mask these out if alt_gr is True
+        self.control = bool(control) and not self.alt_gr
+        self.alt = bool(alt) and not self.alt_gr 
 
     def __eq__(self, rhs):
         return self.key == rhs.key and self.shift == rhs.shift and self.control == rhs.control and self.alt == rhs.alt 
 
     def __ne__(self, rhs):
         return not self.__eq__(rhs)
+
+    def __str__(self):
+        return f"Key: Key={self.key} Shift={self.shift} Control={self.control} Alt={self.alt} AltGr={self.alt_gr}"
 
 class RecordedKey:
     KEY = 0
@@ -470,7 +479,7 @@ def ClearCommandStr(save=False):
     g_Command = ""
 
 #------------------------------------------------------------------------
-def EnterCommandMode():
+def EnterCommandMode(pop_undo_group=True):
     global g_Mode
     global g_Command
     global g_SingleReplace
@@ -495,7 +504,8 @@ def EnterCommandMode():
         N10X.Editor.ResetCursorBlink()
 
         if not was_visual and not g_Mode == Mode.COMMANDLINE:
-            N10X.Editor.PopUndoGroup()
+            if pop_undo_group:
+                N10X.Editor.PopUndoGroup()
             MoveCursorPos(x_delta=-1, override_horizontal_target=True)
 
     g_Mode = Mode.COMMAND
@@ -1202,7 +1212,7 @@ def SelectOrMoveInsideBlock(c, count=1, insert_after_move=False):
     return False 
 
 #------------------------------------------------------------------------
-def GetAroundWordSelection(start, wrap=True):
+def GetAroundWordSelection(start):
     x, y = start
 
     start_x = x
@@ -1211,7 +1221,6 @@ def GetAroundWordSelection(start, wrap=True):
     line = GetLine(y)
 
     character_class = GetCharacterClass(line[end_x])
-    alt_class = CharacterClass.WHITESPACE if character_class == CharacterClass.WORD else CharacterClass.WORD            
 
     line_len = len(line)
 
@@ -1247,6 +1256,65 @@ def GetInsideWordSelection(start):
     while start_x > 0 and GetCharacterClass(line[start_x - 1]) == character_class:
         start_x -= 1
 
+    return (start_x, y), (end_x, y)
+
+#------------------------------------------------------------------------
+def GetAroundWordSelectionWithPunctuation(start):
+    x, y = start
+
+    start_x = x
+    end_x = x
+
+    line = GetLine(y)
+
+    line_len = len(line)
+
+    is_start_whitespace = GetCharacterClass(line[end_x]) == CharacterClass.WHITESPACE
+
+    while end_x < line_len - 1:
+        curr_class = GetCharacterClass(line[end_x + 1])
+        if end_x < line_len - 2:
+            next_class = GetCharacterClass(line[end_x + 2])
+            if is_start_whitespace:
+                if curr_class != CharacterClass.WHITESPACE and next_class == CharacterClass.WHITESPACE:
+                    end_x += 1
+                    break
+            else:
+                if curr_class == CharacterClass.WHITESPACE and next_class != CharacterClass.WHITESPACE:
+                    end_x += 1
+                    break
+        end_x += 1
+
+    while start_x > 0 and     (is_start_whitespace and GetCharacterClass(line[start_x - 1]) == CharacterClass.WHITESPACE) or \
+                          (not is_start_whitespace and GetCharacterClass(line[start_x - 1]) != CharacterClass.WHITESPACE):
+        start_x -= 1
+
+    return (start_x, y), (end_x, y)
+
+
+#------------------------------------------------------------------------
+def GetInsideWordSelectionWithPunctuation(start):
+    x, y = start
+    x = min(GetLineLength(y) - 1, x)
+
+    start_x = x
+    end_x = x
+
+    line = GetLine(y)
+
+    character_class = GetCharacterClass(line[end_x])
+    if character_class != CharacterClass.WHITESPACE:
+        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) != CharacterClass.WHITESPACE:
+            end_x += 1
+
+        while start_x > 0 and GetCharacterClass(line[start_x - 1]) != CharacterClass.WHITESPACE:
+            start_x -= 1
+    else:
+        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) == CharacterClass.WHITESPACE:
+            end_x += 1
+
+        while start_x > 0 and GetCharacterClass(line[start_x - 1]) == CharacterClass.WHITESPACE:
+            start_x -= 1
     return (start_x, y), (end_x, y)
 
 #------------------------------------------------------------------------
@@ -1734,9 +1802,27 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif c == "diW":
+        N10X.Editor.PushUndoGroup()
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
     elif c == "daw":
         N10X.Editor.PushUndoGroup()
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1])
+        N10X.Editor.PopUndoGroup()
+        should_save = True
+
+    elif c == "daW":
+        N10X.Editor.PushUndoGroup()
+        start, end = GetAroundWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         SetCursorPos(start[0], start[1])
@@ -1957,6 +2043,16 @@ def HandleCommandModeChar(char):
         N10X.Editor.PopUndoGroup()
         should_save = True
 
+    elif (m:= re.match("d'([a-zA-Z])", c)):
+        if m.group(1) in g_JumpMap:
+            jump = g_JumpMap[m.group(1)]
+            N10X.Editor.PushUndoGroup()
+            x, y = N10X.Editor.GetCursorPos()
+            SetSelection((x, y), jump)
+            N10X.Editor.ExecuteCommand("Cut")
+            N10X.Editor.PopUndoGroup()
+            should_save = True
+
     elif (m := re.match("d" + g_RepeatMatch, c)) or c == "dg":
         return
 
@@ -2149,79 +2245,81 @@ def HandleCommandModeChar(char):
     elif c == "ce":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
-        MoveToWordEnd()
+        for i in range(repeat_count):
+            MoveToWordEnd()
         end = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0]), end[1])
-            SetSelection(start, end)
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cE":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
-        MoveToTokenEnd()
+        for i in range(repeat_count):
+            MoveToTokenEnd()
         end = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0]), end[1])
-            SetSelection(start, end)
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cw":
-        x, y = N10X.Editor.GetCursorPos()
-        x = min(GetLineLength(y) - 1, x)
-        end_x = x
-        line = GetLine(y)
-        character_class = GetCharacterClass(line[end_x])
-        while end_x < len(line) - 1 and GetCharacterClass(line[end_x + 1]) == character_class:
-            end_x += 1
-        SetSelection((x, y), (end_x, y))
+        N10X.Editor.PushUndoGroup()
+        start = N10X.Editor.GetCursorPos()
+        for i in range(repeat_count):
+            MoveToWordEnd()
+        end = N10X.Editor.GetCursorPos()
+        SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cW":
         N10X.Editor.PushUndoGroup()
         start = N10X.Editor.GetCursorPos()
-        MoveToNextTokenStart()
+        for i in range(repeat_count):
+            MoveToTokenEnd()
         end = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0]), end[1])
-            SetSelection(start, end)
-            N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        SetCursorPos(start[0], start[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
-
-    elif c == "cb":
+    
+    elif c == "cb": 
         N10X.Editor.PushUndoGroup()
-        end = N10X.Editor.GetCursorPos()
-        MoveToWordStart()
         start = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0] - 1), end[1])
-            SetSelection(start, end)
+        for i in range(repeat_count):
+            MoveToWordStart()
+        end = N10X.Editor.GetCursorPos()
+        if start[0] > 0:  
+            SetSelection(end, (start[0] - 1, start[1]))
             N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetCursorPos(end[0], end[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "cB":
         N10X.Editor.PushUndoGroup()
-        end = N10X.Editor.GetCursorPos()
-        MoveToTokenStart()
         start = N10X.Editor.GetCursorPos()
-        if start != end:
-            end = (max(0, end[0] - 1), end[1])
-            SetSelection(start, end)
+        for i in range(repeat_count):
+            MoveToTokenStart()
+        end = N10X.Editor.GetCursorPos()
+        if start[0] > 0:  
+            SetSelection(end, (start[0] - 1, start[1]))
             N10X.Editor.ExecuteCommand("Cut")
-        N10X.Editor.PopUndoGroup()
+        SetCursorPos(end[0], end[1], max_offset=0)
         EnterInsertMode()
+        N10X.Editor.PopUndoGroup()
         should_save = True
 
     elif c == "ciw":
@@ -2231,8 +2329,22 @@ def HandleCommandModeChar(char):
         EnterInsertMode()
         should_save = True
 
+    elif c == "ciW":
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
     elif c == "caw":
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Cut")
+        EnterInsertMode()
+        should_save = True
+
+    elif c == "caW":
+        start, end = GetAroundWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Cut")
         EnterInsertMode()
@@ -2510,8 +2622,20 @@ def HandleCommandModeChar(char):
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(start[0], start[1])
 
+    elif c == "yiW":
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
     elif c == "yaw":
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        SetSelection(start, end)
+        N10X.Editor.ExecuteCommand("Copy")
+        SetCursorPos(start[0], start[1])
+
+    elif c == "yaW":
+        start, end = GetAroundWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         SetSelection(start, end)
         N10X.Editor.ExecuteCommand("Copy")
         SetCursorPos(start[0], start[1])
@@ -2874,9 +2998,11 @@ def HandleCommandModeKey(key: Key):
     else:
         handled = False
 
+        # Note: Only pass through for control and alt when combinations are used, i.e. not when control or alt has been pressed by itself. This fixes issues where non ISO/ANSI keyboards need to use these keys for accessing other characters that ISO/ANSI access by pressing shift, .e.g { on German keyboards.
+            
         pass_through = \
-            key.control or \
-            key.alt or \
+            (key.control and key.key != "Control") or \
+            (key.alt and key.key != "Alt") or \
             key.key == "Backspace" or \
             key.key == "Up" or \
             key.key == "Down" or \
@@ -2966,6 +3092,22 @@ def HandleCommandlineModeKey(key: Key):
             g_Commandline.historyIndex = len(history_buffer)-1 
             if is_search:
                 UpdateSearchText(g_Commandline.text[1:])
+
+    # Paste
+    elif key == Key("V", control=True):
+        clipboard_text = GetClipboardValue().strip()
+        # Truncate if too big
+        max_paste_length = 512 # characters
+        clipboard_text = clipboard_text[:max_paste_length-len(clipboard_text)]
+        # Insert clipboard at cursor pos
+        g_Commandline.text = g_Commandline.text[:g_Commandline.cursorPos] + clipboard_text + g_Commandline.text[g_Commandline.cursorPos:]
+        g_Commandline.cursorPos += len(clipboard_text)
+        # Update history buffer
+        history_buffer[-1] = g_Commandline.text[1:]               
+        # Update search text if searching
+        if IsSearching() and len(g_Commandline.text) > 1:
+            UpdateSearchText(g_Commandline.text[1:])
+
     # Navigation
 
     elif key == Key("Left"):
@@ -3409,9 +3551,19 @@ def HandleVisualModeChar(char):
         start, end = GetInsideWordSelection(N10X.Editor.GetCursorPos())
         AddVisualModeSelection(start, end)
 
+    elif c == "iW":
+        g_Mode = Mode.VISUAL
+        start, end = GetInsideWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
+        AddVisualModeSelection(start, end)
+
     elif c == "aw":
         g_Mode = Mode.VISUAL
         start, end = GetAroundWordSelection(N10X.Editor.GetCursorPos())
+        AddVisualModeSelection(start, end)
+
+    elif c == "aW":
+        g_Mode = Mode.VISUAL
+        start, end = GetAroundWordSelectionWithPunctuation(N10X.Editor.GetCursorPos())
         AddVisualModeSelection(start, end)
 
     elif (m := re.match("i" + g_BlockMatch, c)):
@@ -3460,6 +3612,42 @@ def HandleVisualModeChar(char):
         EnterCommandMode()
         should_save = True
 
+    elif c == "z":
+        return
+
+    elif c == "zt":
+        # Apply offset so we don't set the current line as the first visible line but the one just after.
+        # This is so we can smooth scroll up using k after zt because 10x prevents the cursor being
+        # on the first visible line.
+        offset = 1
+        N10X.Editor.SetScrollLine(max(0, N10X.Editor.GetCursorPos()[1] - offset))
+
+    elif c == "zz":
+        N10X.Editor.CenterViewAtLinePos(N10X.Editor.GetCursorPos()[1])
+
+    elif c == "zb":
+        # Apply offset so we don't set the current line as last visible line but the one just before.
+        # This is so we can smooth scroll down using j after zb because 10x prevents the cursor being
+        # on the last visible line.
+        offset = 1
+        # Subtract 1 because ScrollLine is 0 indexed
+        bottom = N10X.Editor.GetScrollLine() + N10X.Editor.GetVisibleLineCount() - 1 - offset
+        scroll_delta = bottom - N10X.Editor.GetCursorPos()[1]
+        N10X.Editor.SetScrollLine(max(0, N10X.Editor.GetScrollLine() - scroll_delta))
+
+    elif c == "H":
+        scroll_line = N10X.Editor.GetScrollLine()
+        SetCursorPos(y=scroll_line+1)
+
+    elif c == "L":
+        scroll_line = N10X.Editor.GetScrollLine()
+        visible_line_count = N10X.Editor.GetVisibleLineCount()
+        SetCursorPos(y=scroll_line + visible_line_count-2)
+
+    elif c == "M":
+        scroll_line = N10X.Editor.GetScrollLine()
+        visible_line_count = N10X.Editor.GetVisibleLineCount()
+        SetCursorPos(y=scroll_line + int(visible_line_count / 2))
     else:
         print("[vim] Unknown command!")
     
@@ -3476,6 +3664,19 @@ def HandleSuspendedModeKey(key: Key):
         return True
 
     return False
+
+#------------------------------------------------------------------------
+def GetCurrentScopeName():
+    return "Scope: " + (N10X.Editor.GetCurrentScopeName() or "(none)")
+
+#------------------------------------------------------------------------
+def GetCommandModeStatusBarText():
+    text = ""
+
+    if g_DisplayCurrentScopeName:
+        text += GetCurrentScopeName()
+
+    return text
 
 #------------------------------------------------------------------------
 def UpdateCursorMode():
@@ -3520,7 +3721,7 @@ def UpdateCursorMode():
     else:
         N10X.Editor.SetCursorVisible(0, True)
         N10X.Editor.SetCursorMode("Block")
-        N10X.Editor.SetStatusBarText("")
+        N10X.Editor.SetStatusBarText(GetCommandModeStatusBarText())
 
 #------------------------------------------------------------------------
 # Recording
@@ -3656,6 +3857,7 @@ def UpdateVim():
     global g_VimExitInsertModeCharSequence;
     global g_SmartCaseEnabled
     global g_UseFilteredCommandlineHistory
+    global g_DisplayCurrentScopeName
 
     if N10X.Editor.GetSetting("VimExitInsertModeCharSequence"):
         g_VimExitInsertModeCharSequence = N10X.Editor.GetSetting("VimExitInsertModeCharSequence")
@@ -3670,6 +3872,7 @@ def UpdateVim():
     g_Use10xCommandPanel            = GetSettingBool("VimUse10xCommandPanel",               default_value="false")
     g_Use10xFindPanel               = GetSettingBool("VimUse10xFindPanel",                  default_value="false")
     g_UseFilteredCommandlineHistory = GetSettingBool("VimCommandlineFilteredHistory",       default_value="true")
+    g_DisplayCurrentScopeName       = GetSettingBool("VimDisplayCurrentScopeName",          default_value="true")
 
     if g_VimEnabled != enable_vim:
         g_VimEnabled = enable_vim
@@ -3680,8 +3883,7 @@ def UpdateVim():
             N10X.Editor.AddOnInterceptKeyFunction(OnInterceptKey)
             N10X.Editor.AddOnFileLosingFocusFunction(OnFileLosingFocus)
             N10X.Editor.OverrideSetting("ReverseFindSelection","true")
-            N10X.Editor.PushUndoGroup() # EnterCommandMode will do a PopUndoGroup because we were not in visual mode, so must push here
-            EnterCommandMode()
+            EnterCommandMode(False)
 
         else:
             print("[vim] Disabling Vim")
